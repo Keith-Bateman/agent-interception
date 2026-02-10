@@ -1,0 +1,178 @@
+"""Tests for the SQLite interaction store."""
+
+from __future__ import annotations
+
+import pytest
+
+from agent_interception.models import Interaction, Provider
+from agent_interception.storage.store import InteractionStore
+
+
+@pytest.mark.asyncio
+async def test_save_and_get(store: InteractionStore, sample_interaction: Interaction) -> None:
+    """Test saving and retrieving an interaction."""
+    await store.save(sample_interaction)
+    retrieved = await store.get(sample_interaction.id)
+
+    assert retrieved is not None
+    assert retrieved.id == sample_interaction.id
+    assert retrieved.method == "POST"
+    assert retrieved.path == "/v1/messages"
+    assert retrieved.provider == Provider.ANTHROPIC
+    assert retrieved.model == "claude-sonnet-4-20250514"
+    assert retrieved.status_code == 200
+    assert retrieved.response_text == "Hello! How can I help?"
+    assert retrieved.is_streaming is False
+
+
+@pytest.mark.asyncio
+async def test_save_and_get_streaming(
+    store: InteractionStore, sample_streaming_interaction: Interaction
+) -> None:
+    """Test saving and retrieving a streaming interaction."""
+    await store.save(sample_streaming_interaction)
+    retrieved = await store.get(sample_streaming_interaction.id)
+
+    assert retrieved is not None
+    assert retrieved.is_streaming is True
+    assert len(retrieved.stream_chunks) == 2
+    assert retrieved.stream_chunks[0].delta_text == "Hello"
+    assert retrieved.stream_chunks[1].delta_text == "!"
+    assert retrieved.time_to_first_token_ms == 120.0
+
+
+@pytest.mark.asyncio
+async def test_get_nonexistent(store: InteractionStore) -> None:
+    """Test getting a nonexistent interaction returns None."""
+    result = await store.get("nonexistent-id")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_list_interactions(
+    store: InteractionStore,
+    sample_interaction: Interaction,
+    sample_streaming_interaction: Interaction,
+) -> None:
+    """Test listing interactions."""
+    await store.save(sample_interaction)
+    await store.save(sample_streaming_interaction)
+
+    results = await store.list_interactions()
+    assert len(results) == 2
+
+
+@pytest.mark.asyncio
+async def test_list_interactions_filter_by_provider(
+    store: InteractionStore,
+    sample_interaction: Interaction,
+    sample_streaming_interaction: Interaction,
+) -> None:
+    """Test listing interactions filtered by provider."""
+    await store.save(sample_interaction)
+    await store.save(sample_streaming_interaction)
+
+    anthropic_results = await store.list_interactions(provider="anthropic")
+    assert len(anthropic_results) == 1
+    assert anthropic_results[0].provider == Provider.ANTHROPIC
+
+    openai_results = await store.list_interactions(provider="openai")
+    assert len(openai_results) == 1
+    assert openai_results[0].provider == Provider.OPENAI
+
+
+@pytest.mark.asyncio
+async def test_list_interactions_filter_by_model(
+    store: InteractionStore,
+    sample_interaction: Interaction,
+    sample_streaming_interaction: Interaction,
+) -> None:
+    """Test listing interactions filtered by model."""
+    await store.save(sample_interaction)
+    await store.save(sample_streaming_interaction)
+
+    results = await store.list_interactions(model="gpt-4")
+    assert len(results) == 1
+    assert results[0].model == "gpt-4"
+
+
+@pytest.mark.asyncio
+async def test_list_interactions_with_limit(
+    store: InteractionStore,
+    sample_interaction: Interaction,
+    sample_streaming_interaction: Interaction,
+) -> None:
+    """Test listing interactions with a limit."""
+    await store.save(sample_interaction)
+    await store.save(sample_streaming_interaction)
+
+    results = await store.list_interactions(limit=1)
+    assert len(results) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_stats(
+    store: InteractionStore,
+    sample_interaction: Interaction,
+    sample_streaming_interaction: Interaction,
+) -> None:
+    """Test getting aggregate statistics."""
+    await store.save(sample_interaction)
+    await store.save(sample_streaming_interaction)
+
+    stats = await store.get_stats()
+    assert stats["total_interactions"] == 2
+    assert stats["by_provider"]["anthropic"] == 1
+    assert stats["by_provider"]["openai"] == 1
+    assert "claude-sonnet-4-20250514" in stats["by_model"]
+    assert "gpt-4" in stats["by_model"]
+    assert stats["avg_latency_ms"] is not None
+
+
+@pytest.mark.asyncio
+async def test_get_stats_empty(store: InteractionStore) -> None:
+    """Test getting stats from an empty database."""
+    stats = await store.get_stats()
+    assert stats["total_interactions"] == 0
+    assert stats["by_provider"] == {}
+    assert stats["avg_latency_ms"] is None
+
+
+@pytest.mark.asyncio
+async def test_token_usage_roundtrip(
+    store: InteractionStore, sample_interaction: Interaction
+) -> None:
+    """Test that token usage survives serialization roundtrip."""
+    await store.save(sample_interaction)
+    retrieved = await store.get(sample_interaction.id)
+
+    assert retrieved is not None
+    assert retrieved.token_usage is not None
+    assert retrieved.token_usage.input_tokens == 10
+    assert retrieved.token_usage.output_tokens == 15
+
+
+@pytest.mark.asyncio
+async def test_cost_estimate_roundtrip(
+    store: InteractionStore, sample_interaction: Interaction
+) -> None:
+    """Test that cost estimate survives serialization roundtrip."""
+    await store.save(sample_interaction)
+    retrieved = await store.get(sample_interaction.id)
+
+    assert retrieved is not None
+    assert retrieved.cost_estimate is not None
+    assert retrieved.cost_estimate.total_cost == pytest.approx(0.000105)
+
+
+@pytest.mark.asyncio
+async def test_request_headers_roundtrip(
+    store: InteractionStore, sample_interaction: Interaction
+) -> None:
+    """Test that request headers survive serialization roundtrip."""
+    await store.save(sample_interaction)
+    retrieved = await store.get(sample_interaction.id)
+
+    assert retrieved is not None
+    assert retrieved.request_headers["content-type"] == "application/json"
+    assert retrieved.request_headers["authorization"] == "Bearer sk-***"
