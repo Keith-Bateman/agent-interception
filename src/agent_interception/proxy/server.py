@@ -131,7 +131,7 @@ def create_app(
         Route(
             "/{path:path}",
             proxy_catchall,
-            methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+            methods=["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
         ),
     ]
 
