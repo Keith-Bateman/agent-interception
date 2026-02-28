@@ -319,3 +319,34 @@ async def _stats(db_path: str | None) -> None:
         display.display_stats(data)
     finally:
         await store.close()
+
+
+@cli.command()
+@click.option("--db", "db_path", default=None, help="Path to SQLite database")
+def conversations(db_path: str | None) -> None:
+    """List all tracked conversation threads."""
+    asyncio.run(_conversations(db_path))
+
+
+async def _conversations(db_path: str | None) -> None:
+    overrides: dict[str, Any] = {}
+    if db_path is not None:
+        overrides["db_path"] = db_path
+
+    config = InterceptorConfig(**overrides)
+
+    from agent_interception.display.terminal import TerminalDisplay
+    from agent_interception.storage.store import InteractionStore
+
+    display = TerminalDisplay(config)
+    store = InteractionStore(config)
+    await store.initialize()
+
+    try:
+        conversation_list = await store.list_conversations()
+        if not conversation_list:
+            display.console.print("[dim]No conversations found.[/dim]")
+            return
+        display.display_conversations_table(conversation_list)
+    finally:
+        await store.close()
